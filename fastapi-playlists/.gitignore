@@ -1,0 +1,18 @@
+# fastapi-playlists .gitignore
+
+# Python virtual envs
+venv/
+**/venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Logs
+*.log
+
+# Keep base .env tracked per request; ignore env variants
+.env.local
+.env.*.local
+.env.production
+.env.*
