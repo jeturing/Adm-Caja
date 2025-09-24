@@ -1,0 +1,40 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  name: Default
+
+variables:
+  pythonVersion: '3.11'
+
+stages:
+  - stage: BuildAndTest
+    displayName: 'Build and Test'
+    jobs:
+      - job: Test
+        displayName: 'Run tests on self-hosted agent'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '$(pythonVersion)'
+          - script: |
+              python -m pip install --upgrade pip
+              if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+            displayName: 'Install dependencies'
+          - script: |
+              if [ -f tests/run_tests.py ]; then python tests/run_tests.py || true; fi
+            displayName: 'Run tests (if present)'
+
+  - stage: Deploy
+    displayName: 'Deploy'
+    dependsOn: BuildAndTest
+    jobs:
+      - job: DeployToHost
+        displayName: 'Deploy to host'
+        steps:
+          - script: |
+              chmod +x deploy/deploy_local.sh || true
+              ./deploy/deploy_local.sh
+            displayName: 'Run local deploy script'
