@@ -37,7 +37,7 @@ source venv/bin/activate
 
 echo "Instalando dependencias básicas de Python..."
 pip install --upgrade pip
-pip install fastapi uvicorn python-dotenv requests python-jose[cryptography] python-multipart sentry-sdk[fastapi]
+    pip install fastapi uvicorn python-dotenv requests "python-jose[cryptography]>=3.3.1" python-multipart sentry-sdk[fastapi]
 
 echo "Iniciando backend..."
 cd Backend

@@ -45,7 +45,7 @@ free_port() {
             echo "   ⚠️  Puerto $port ocupado por PID $pid_in_use. Liberando puerto..."
             kill "$pid_in_use" 2>/dev/null || true
             sleep 2  # Dar tiempo para que el proceso termine
-        fi
+python-jose[cryptography]>=3.3.1
     else
         # Alternativa usando netstat si lsof no está disponible
         local pid_in_use
@@ -152,15 +152,16 @@ install_dependencies_with_progress() {
     if [ ! -f "$REQUIREMENTS_FILE" ]; then
         echo "📝 Creando 'requirements.txt'..."
         cat > "$REQUIREMENTS_FILE" << EOF
-fastapi>=0.104.1
-uvicorn[standard]>=0.24.0
-pydantic>=2.5.0
-requests>=2.31.0
-python-jose[cryptography]>=3.3.0
-python-dotenv>=1.0.0
-sentry-sdk>=1.40.0
-mysql-connector-python>=8.0.0
-EOF
+    fastapi>=0.104.1
+    uvicorn[standard]>=0.24.0
+    pydantic>=2.5.0
+    requests>=2.31.0
+    # security update
+    python-jose[cryptography]>=3.3.1
+    python-dotenv>=1.0.0
+    sentry-sdk>=1.40.0
+    mysql-connector-python>=8.0.0
+    EOF
     fi
     
     # Verificar si pip funciona

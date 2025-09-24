@@ -293,10 +293,15 @@ def verify_jwt_auth0(authorization: Optional[str] = Header(None)) -> dict:
         rsa_key = {}
         for key in jwks["keys"]:
             if key.get("kid") == unverified_header.get("kid"):
+                if key.get("kty") != "RSA":
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Clave con tipo inesperado. Se requiere 'RSA'."
+                    )
                 rsa_key = {
                     "kty": key["kty"],
                     "kid": key["kid"],
-                    "use": key["use"],
+                    "use": key.get("use"),
                     "n": key["n"],
                     "e": key["e"]
                 }

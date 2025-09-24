@@ -189,6 +189,13 @@ def verify_jwt_auth0(authorization: Optional[str] = Header(None)) -> dict:
         rsa_key = {}
         for key in jwks.get("keys", []):
             if key.get("kid") == unverified_header.get("kid"):
+                # Asegurarnos de que la clave sea RSA y tenga los campos esperados.
+                if key.get("kty") != "RSA":
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                                        detail="Clave con tipo inesperado. Se requiere 'RSA'.")
+                if not key.get("n") or not key.get("e"):
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                                        detail="Clave RSA incompleta (falta 'n' o 'e').")
                 rsa_key = {
                     "kty": key["kty"],
                     "kid": key["kid"],

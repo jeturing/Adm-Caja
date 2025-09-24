@@ -3,3 +3,7 @@ uvicorn
 mysql-connector-python
 requests
 
+
+# Añadido por seguridad: python-jose con backend cryptography
+python-jose[cryptography]>=3.3.1
+
