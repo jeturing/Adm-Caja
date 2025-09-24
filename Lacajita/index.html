@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <script type="module">
+import RefreshRuntime from "/@react-refresh"
+RefreshRuntime.injectIntoGlobalHook(window)
+window.$RefreshReg$ = () => {}
+window.$RefreshSig$ = () => (type) => type
+window.__vite_plugin_react_preamble_installed__ = true
+</script>
+
+    <script type="module" src="/@vite/client"></script>
+
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="La Cajita TV - Administración de Contenido" />
+    <title>La Cajita TV - Admin</title>
+    <style>
+      /* Mostrar loader mientras carga la app */
+      .app-loader {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        background: #f8fafc;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      .app-loader.hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body class="dark:bg-gray-900">
+    <div id="root">
+      <div class="app-loader" id="app-loader">
+        <div style="text-align: center;">
+          <div style="width: 40px; height: 40px; border: 4px solid #e5e7eb; border-top: 4px solid #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 16px;"></div>
+          <p style="color: #6b7280; margin: 0;">Cargando La Cajita TV...</p>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx?t=1755971570093"></script>
+    <style>
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    </style>
+    <!-- Error overlay helper: muestra errores JS en pantalla para facilitar depuración -->
+    <script>
+      (function(){
+        function escapeHtml(s){ if(!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+        function showOverlay(title, msg, stack){
+          var overlay = document.getElementById('error-overlay');
+          if(!overlay){
+            overlay = document.createElement('div');
+            overlay.id = 'error-overlay';
+            Object.assign(overlay.style, {
+              position: 'fixed', left: '0', top: '0', right: '0', bottom: '0',
+              background: 'rgba(0,0,0,0.85)', color: '#fff', padding: '18px', zIndex: 2147483647,
+              fontFamily: 'Menlo, monospace', fontSize: '13px', overflow: 'auto'
+            });
+            document.body.appendChild(overlay);
+          }
+          overlay.innerHTML = '<h2 style="margin:0 0 8px;color:#ff6b6b">'+escapeHtml(title||'JavaScript Error')+'</h2>' +
+            '<div style="white-space:pre-wrap;">' + escapeHtml(msg || '') + '</div>' +
+            (stack ? '<hr style="border-top:1px solid rgba(255,255,255,0.08)"/><pre style="white-space:pre-wrap;">'+escapeHtml(stack)+'</pre>' : '');
+          var loader = document.getElementById('app-loader'); if(loader) loader.style.display = 'none';
+        }
+
+        window.addEventListener('error', function(ev){
+          try{
+            var msg = ev.message || (ev.error && ev.error.message) || String(ev);
+            var stack = ev.error && ev.error.stack;
+            console.error('Captured window error:', ev.error || ev.message || ev);
+            showOverlay('Uncaught error', msg, stack);
+          }catch(e){ console.error(e); }
+        });
+
+        window.addEventListener('unhandledrejection', function(ev){
+          try{
+            var reason = ev.reason || ev.detail || ev;
+            var msg = (reason && reason.message) || String(reason);
+            var stack = reason && reason.stack;
+            console.error('Captured unhandledrejection:', reason);
+            showOverlay('Unhandled promise rejection', msg, stack);
+          }catch(e){ console.error(e); }
+        });
+
+        // Log available Vite env keys to console (no-op if not supported in this context)
+        window.addEventListener('load', function(){
+          try{ console.log('import.meta.env keys:', Object.keys(import.meta.env || {})); }catch(e){}
+        });
+      })();
+    </script>
+    <script>
+      // Ocultar loader cuando la app esté lista
+      window.addEventListener('load', () => {
+        setTimeout(() => {
+          const loader = document.getElementById('app-loader');
+          if (loader) {
+            loader.classList.add('hidden');
+          }
+        }, 1000);
+      });
+    </script>
+  </body>
+</html>

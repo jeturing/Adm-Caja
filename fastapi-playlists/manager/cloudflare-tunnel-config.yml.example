@@ -1,0 +1,41 @@
+# Configuración ejemplo para Cloudflare Tunnel
+# Archivo: ~/.cloudflared/config.yml
+
+tunnel: your-tunnel-uuid
+credentials-file: /root/.cloudflared/your-tunnel-uuid.json
+
+ingress:
+  # API Principal - Puerto 8000
+  - hostname: hidra.sajet.us
+    service: http://localhost:8000
+    
+  # API Manager - Puerto 8002  
+  - hostname: odin.sajet.us
+    service: http://localhost:8002
+    
+  # API Secundaria - Puerto 8001
+  - hostname: orion.sajet.us  
+    service: http://localhost:8001
+
+  # Catch-all rule (requerido)
+  - service: http_status:404
+
+# Configuraciones adicionales
+originRequest:
+  connectTimeout: 30s
+  tlsTimeout: 10s
+  tcpKeepAlive: 30s
+  noHappyEyeballs: false
+  keepAliveConnections: 10
+  keepAliveTimeout: 90s
+  httpHostHeader: ""
+  originServerName: ""
+  caPool: ""
+  noTLSVerify: false
+  disableChunkedEncoding: false
+  proxyConnectionTimeout: 30s
+  proxyTLSTimeout: 10s
+
+# Configuración de logs
+loglevel: info
+transport-loglevel: warn

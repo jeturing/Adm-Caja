@@ -1,0 +1,15 @@
+[Unit]
+Description=Adm-Caj Frontend (static build served with serve)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/Lacajita/Adm-Caj
+ExecStart=/bin/bash -lc 'cd /opt/Lacajita/Adm-Caj && export NODE_ENV=production; exec npx --no-install serve -s dist -l 5174'
+Restart=always
+RestartSec=3
+User=www-data
+Environment=PATH=/usr/bin:/bin:/usr/local/bin
+
+[Install]
+WantedBy=multi-user.target

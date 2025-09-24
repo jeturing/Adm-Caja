@@ -1,0 +1,757 @@
+from fastapi import FastAPI, HTTPException, status, Request, Response, Header, Depends, Query, Body, UploadFile, File, Form
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+from datetime import datetime, timedelta
+import requests  # para el proxy de LiveTV y JWKS de Auth0
+from jose import jwt as jose_jwt
+from jose.exceptions import JWTError as JoseJWTError, ExpiredSignatureError as JoseExpiredSignatureError
+from functools import lru_cache
+from dotenv import load_dotenv
+import os
+import sentry_sdk
+import logging
+import json
+import mysql.connector
+from pathlib import Path
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Cargar variables de entorno desde .env
+load_dotenv(dotenv_path=".env")
+
+# ——— Configuración de Sentry para monitoreo ——————————————————
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN", "https://f1d0b347424ccd9c9d96e5bc1c030d3b@o4508162202009600.ingest.us.sentry.io/4509480680947712"),
+    # Configuración para capturar datos de performance y errores
+    traces_sample_rate=0.3,  # 30% de las transacciones para performance monitoring
+    profiles_sample_rate=0.3,  # 30% de las transacciones para profiling
+    # Incluir datos de headers y IP de usuarios para debugging
+    send_default_pii=True,
+    # Configuración específica para FastAPI
+    integrations=[],
+    # Environment y release tags
+    environment=os.getenv("DEV_ENVIRONMENT", "production"),
+    release=os.getenv("RELEASE", "v1.0.0-auth0"),
+)
+
+# SECRET_KEY ya no se usará para la validación de tokens de Auth0, pero podría ser útil para otras cosas.
+SECRET_KEY = os.getenv("SECRET_KEY")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_USER = os.getenv("DB_USER", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_NAME = os.getenv("DB_NAME", "db_jeturing")
+
+# Variables para Auth0
+AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
+AUTH0_API_AUDIENCE = os.getenv("AUTH0_API_AUDIENCE")
+ALGORITHMS = ["RS256"]
+
+# Configuración para uploads
+UPLOAD_DIR = 'img'
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# API Externa Config
+API_BASE_URL = os.getenv("API_BASE_URL", "https://b5f8a23e7d06c2de5ef515ae93e16016.sajet.us")
+
+# ---- Auth0 Management API Config ----
+AUTH0_MGMT_CLIENT_ID = os.getenv("AUTH0_MGMT_CLIENT_ID")
+AUTH0_MGMT_CLIENT_SECRET = os.getenv("AUTH0_MGMT_CLIENT_SECRET")
+
+#if not DB_PASSWORD:
+ #   raise RuntimeError("DB_PASSWORD no está definido en .env")
+if not AUTH0_DOMAIN:
+    raise RuntimeError("AUTH0_DOMAIN no está definido en .env. Necesario para la autenticación.")
+if not AUTH0_API_AUDIENCE:
+    raise RuntimeError("AUTH0_API_AUDIENCE no está definido en .env. Necesario para la autenticación.")
+if not AUTH0_MGMT_CLIENT_ID or not AUTH0_MGMT_CLIENT_SECRET:
+    raise RuntimeError("Faltan credenciales Auth0 Management en .env")
+
+# ——— Configuración de la aplicación FastAPI ——————————————————
+app = FastAPI(
+    title="Core API Jeturing",
+    description="""
+    ## API REST para Core API Jeturing
+
+    Esta API proporciona endpoints para gestionar:
+
+    
+
+    ### Autenticación
+
+    Todos los endpoints requieren autenticación mediante **Auth0 JWT tokens**.
+
+    Para obtener un token:
+
+bash
+    curl --request POST \\
+      --url https://segrd.us.auth0.com/oauth/token \\
+      --header 'content-type: application/json' \\
+      --data '{
+        "client_id":"Token",
+        "client_secret":"TOKEN_DE_CLIENT_SECRET",
+        "audience":"http://localhost/api",
+        "grant_type":"credentials"
+      }'
+
+
+    Luego incluye el token en el header: Authorization: Bearer {token}
+    """,
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    openapi_tags=[
+        {
+            "name": "authentication",
+            "description": "Endpoints de autenticación y usuario",
+        },
+        {
+            "name": "external-api",
+            "description": "Endpoints proxy para API externa",
+        },
+        {
+            "name": "health",
+            "description": "Endpoints de health check y monitoreo",
+        },
+        {
+            "name": "categories",
+            "description": "Gestión de categorías",
+        },
+        {
+            "name": "playlists",
+            "description": "Gestión de playlists y temporadas",
+        },
+        {
+            "name": "segments",
+            "description": "Gestión de segmentos",
+        },
+        {
+            "name": "carousel",
+            "description": "Gestión del carousel de inicio",
+        },
+        {
+            "name": "uploads",
+            "description": "Subida y gestión de archivos",
+        },
+    ]
+)
+
+# Configurar CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # En producción, especifica los dominios permitidos
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ——— Función de conexión a MySQL ——————————————————
+def get_connection():
+    """Obtener conexión a la base de datos MySQL"""
+    try:
+        conn = mysql.connector.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME
+        )
+        return conn
+    except mysql.connector.Error as err:
+        logger.error(f"Error connecting to database: {err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error de conexión a la base de datos: {err}"
+        )
+
+
+
+
+
+def format_date(field_name: str, obj: dict) -> str:
+    """
+    Formatea un campo de fecha de un objeto a formato ISO string.
+
+    Args:
+        field_name: Nombre del campo de fecha en el objeto
+        obj: Diccionario que contiene el campo de fecha
+
+    Returns:
+        Fecha formateada como string ISO o el valor original si no es datetime
+    """
+    value = obj.get(field_name)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+def iso(dt: Optional[datetime]) -> Optional[str]:
+    return dt.isoformat() if dt else None
+
+# ——— Modelos Pydantic —————————————————————————
+class Auth0UserCreate(BaseModel):
+    email: str
+    password: str
+    connection: str = "Username-Password-Authentication"
+
+class ClientCredentialsRequest(BaseModel):
+    client_secret: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int
+    scope: Optional[str] = None
+    usage: str = "Include in Authorization header as: Bearer {access_token}"
+
+class LoginRequest(BaseModel):
+    """Modelo para credenciales de inicio de sesión."""
+    email: str
+    password: str
+
+class Auth0User(BaseModel):
+    sub: str  # Auth0 user id
+    email: Optional[str] = None
+    name: Optional[str] = None
+    # Otros campos que puedan venir en el token de Auth0
+
+# ——— Modelos para la gestión de contenido ——————————————————
+class Categories(BaseModel):
+    id: int = 0
+    name: str = None
+
+class Playlist(BaseModel):
+    id: str
+    segid: int
+    img: str
+    title: str
+    desc: str = ""
+    categories: list
+
+class dPlaylist(BaseModel):
+    id: str
+
+class SeasVideos(BaseModel):
+    season_id: int
+    videoarr: list
+
+class Seasons(BaseModel):
+    id: int = 0
+    playlist_id: str
+    name: str
+    delete: bool = False
+
+class Segments(BaseModel):
+    arrorder: list
+
+class Homecarousel(BaseModel):
+    id: int = 0
+    link: str
+    imgsrc: str = None
+    video: str = None
+
+
+# ——— Validación de JWT (AHORA CON AUTH0 RS256) ——————————————————
+@lru_cache()
+def get_jwk_keys() -> Dict:
+    """
+    Obtiene las claves públicas JWKS de Auth0.
+    Estas claves se utilizan para verificar la firma de los JWT.
+    La función está cacheada para evitar peticiones repetidas.
+    """
+    jwks_url = f"https://{AUTH0_DOMAIN}/.well-known/jwks.json"
+    try:
+        response = requests.get(jwks_url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error crítico: No se pudo obtener el JWK de Auth0 desde {jwks_url}. Error: {e}")
+        raise RuntimeError(f"No se pudo obtener el JWK de Auth0: {e}")
+
+def verify_jwt_auth0(authorization: Optional[str] = Header(None)) -> dict:
+    """
+    Valida el JWT usando la JWK pública de Auth0 (RS256).
+    """
+    if authorization is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Encabezado de autorización ausente."
+        )
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Formato de token inválido. Debe ser 'Bearer <token>'"
+        )
+    token = parts[1]
+    try:
+        jwks = get_jwk_keys()
+        unverified_header = jose_jwt.get_unverified_header(token)
+        rsa_key = {}
+        for key in jwks["keys"]:
+            if key.get("kid") == unverified_header.get("kid"):
+                rsa_key = {
+                    "kty": key["kty"],
+                    "kid": key["kid"],
+                    "use": key["use"],
+                    "n": key["n"],
+                    "e": key["e"]
+                }
+                break
+        if not rsa_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No se pudo encontrar una clave válida para el token."
+            )
+        payload = jose_jwt.decode(
+            token,
+            rsa_key,
+            algorithms=ALGORITHMS,
+            audience=AUTH0_API_AUDIENCE,
+            issuer=f"https://{AUTH0_DOMAIN}/"
+        )
+        return payload
+    except JoseExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="El token ha expirado."
+        )
+    except JoseJWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Error en la validación del token: {e}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Error inesperado: {e}"
+        )
+
+# Dependencia para endpoints protegidos
+def require_auth(token_data: dict = Depends(verify_jwt_auth0)) -> dict:
+    return token_data
+
+# ---- Auth0 Management Token ----
+_mgmt_token: Optional[str] = None
+
+def get_management_token():
+    global _mgmt_token
+    if _mgmt_token:
+        return _mgmt_token
+    url = f"https://{AUTH0_DOMAIN}/oauth/token"
+    payload = {
+        "client_id": AUTH0_MGMT_CLIENT_ID,
+        "client_secret": AUTH0_MGMT_CLIENT_SECRET,
+        "audience": f"https://{AUTH0_DOMAIN}/api/v2/",
+        "grant_type": "client_credentials"
+    }
+    r = requests.post(url, json=payload, timeout=10)
+    r.raise_for_status()
+    _mgmt_token = r.json().get("access_token")
+    return _mgmt_token
+
+def get_auth0_user_info(token_data: dict = Depends(verify_jwt_auth0)) -> Auth0User:
+    """
+    Convierte los datos del token en un objeto Auth0User para mayor consistencia
+    """
+    return Auth0User(
+        sub=token_data.get("sub"),
+        email=token_data.get("email"),
+        name=token_data.get("name") or token_data.get("nickname")
+    )
+
+def get_db_connection():
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        if conn:
+            conn.close()
+
+# ——— Endpoints principales ———————————————————————
+@app.get("/")
+def read_root():
+    return {"Hello": "Jeturing Core Api con Auth0", "status": "OK"}
+
+@app.get("/redoc-custom", response_class=HTMLResponse)
+async def redoc_html():
+    """
+    Endpoint personalizado para Redoc con tema customizado
+    """
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Jeturing Core API - Documentation</title>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="icon" type="image/png" href="https://redocly.github.io/redoc/favicon.png">
+        <style>
+          body {
+            margin: 0;
+            padding: 0;
+          }
+        </style>
+      </head>
+      <body>
+        <redoc
+          spec-url="/openapi.json"
+          theme='{
+            "colors": {
+              "primary": {
+                "main": "#1976d2"
+              }
+            },
+            "typography": {
+              "fontSize": "14px",
+              "lineHeight": "1.5em",
+              "code": {
+                "fontSize": "13px",
+                "fontFamily": "Courier, monospace"
+              },
+              "headings": {
+                "fontFamily": "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif",
+                "fontWeight": "600"
+              }
+            },
+            "sidebar": {
+              "width": "260px",
+              "backgroundColor": "#fafafa"
+            }
+          }'
+          options='{
+            "hideHostname": true,
+            "expandResponses": "200,201",
+            "requiredPropsFirst": true,
+            "sortPropsAlphabetically": true,
+            "showExtensions": true,
+            "noAutoAuth": false,
+            "pathInMiddlePanel": true,
+            "hideDownloadButton": false,
+            "scrollYOffset": 60
+          }'
+        >
+        </redoc>
+        <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+      </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content, status_code=200)
+
+@app.get("/user/me", response_model=Auth0User, tags=["authentication"])
+def get_my_profile(user_info: Auth0User = Depends(get_auth0_user_info)):
+    """Endpoint para obtener el perfil del usuario autenticado desde Auth0"""
+    return user_info
+
+# ---- Endpoints Authentication ----
+@app.post("/auth0/users", tags=["authentication"])
+def create_auth0_user(user: Auth0UserCreate):
+    """Crear un nuevo usuario en Auth0"""
+    token = get_management_token()
+    url = f"https://{AUTH0_DOMAIN}/api/v2/users"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    resp = requests.post(url, json=user.dict(), headers=headers, timeout=10)
+    if resp.status_code != 201:
+        raise HTTPException(status_code=resp.status_code, detail=resp.json())
+    return resp.json()
+
+@app.post("/login", tags=["authentication"])
+def login_grant(email: str, password: str):
+    """Login usando Resource Owner Password Grant.
+
+    Recibe email y password como query parameters en un POST request.
+    """
+    url = f"https://{AUTH0_DOMAIN}/oauth/token"
+    data = {
+        "grant_type": "password",
+        "username": email,
+        "password": password,
+        "audience": AUTH0_API_AUDIENCE,
+        "scope": "openid profile email",
+        "client_id": AUTH0_MGMT_CLIENT_ID,
+        "client_secret": AUTH0_MGMT_CLIENT_SECRET
+    }
+    try:
+        r = requests.post(url, json=data, timeout=10)
+        r.raise_for_status()
+    except requests.exceptions.HTTPError:
+        logger.error(f"Login failed for {email}: {r.text}")
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+    return r.json()
+
+@app.post("/auth/client-credentials", response_model=TokenResponse, tags=["authentication"])
+def get_client_credentials_token(request: ClientCredentialsRequest):
+    """
+    Obtener token JWT usando Client Credentials Grant.
+    Este endpoint es útil para aplicaciones backend que necesitan autenticarse
+    sin intervención del usuario.
+
+    Ejemplo de uso:
+    ```bash
+    curl -X POST "http://domain/auth/client-credentials" \
+         -H "Content-Type: application/json" \
+         -d '{"client_secret": "tu_secret_key_aqui"}'
+    ```
+    """    # Verificar que el client_secret proporcionado coincida con SECRET_KEY
+    if request.client_secret != SECRET_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Client secret inválido"
+        )
+
+    url = f"https://{AUTH0_DOMAIN}/oauth/token"
+    data = {
+        "client_id": AUTH0_MGMT_CLIENT_ID,
+        "client_secret": AUTH0_MGMT_CLIENT_SECRET,
+        "audience": AUTH0_API_AUDIENCE,
+        "grant_type": "client_credentials"
+    }
+
+    try:
+        response = requests.post(url, json=data, timeout=10)
+
+        # Si hay error, capturar más detalles para debugging
+        if response.status_code != 200:
+            try:
+                error_json = response.json()
+            except:
+                error_json = {"error": response.text}
+
+            error_detail = {
+                "status_code": response.status_code,
+                "auth0_error": error_json,
+                "url": url,
+                "client_id": AUTH0_MGMT_CLIENT_ID,
+                "audience": AUTH0_API_AUDIENCE,
+                "domain": AUTH0_DOMAIN
+            }
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error de Auth0 ({response.status_code}): {error_detail}"
+            )
+
+        token_data = response.json()
+
+        return TokenResponse(
+            access_token=token_data.get("access_token"),
+            token_type=token_data.get("token_type", "Bearer"),
+            expires_in=token_data.get("expires_in"),
+            scope=token_data.get("scope"),
+            usage=f"Include in Authorization header as: Bearer {token_data.get('access_token')}"
+        )
+    except HTTPException:
+        raise  # Re-raise HTTPException as-is
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error de conexión con Auth0: {str(e)}"
+        )
+def get_token_simple(client_secret: str):
+    """
+    Versión simplificada para obtener token usando query parameter.
+
+    Ejemplo de uso:
+    ```
+    GET /auth/token?client_secret=tu_secret_key_aqui
+    ```
+
+    ⚠️ Menos seguro que el POST ya que el secret aparece en la URL
+    """
+    # Verificar que el client_secret proporcionado coincida con SECRET_KEY
+    if client_secret != SECRET_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Client secret inválido"
+        )
+
+    url = f"https://{AUTH0_DOMAIN}/oauth/token"
+    data = {
+        "client_id": AUTH0_MGMT_CLIENT_ID,
+        "client_secret": AUTH0_MGMT_CLIENT_SECRET,
+        "audience": AUTH0_API_AUDIENCE,
+        "grant_type": "client_credentials"
+    }
+
+    try:
+        response = requests.post(url, json=data, timeout=10)
+        response.raise_for_status()
+        token_data = response.json()
+
+        return TokenResponse(
+            access_token=token_data.get("access_token"),
+            token_type=token_data.get("token_type", "Bearer"),
+            expires_in=token_data.get("expires_in"),
+            scope=token_data.get("scope"),
+            usage=f"Include in Authorization header as: Bearer {token_data.get('access_token')}"
+        )
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error obteniendo token de Auth0: {str(e)}"
+        )
+
+@app.get("/secure-data", tags=["authentication"])
+def read_secure_data(user_claims: dict = Depends(require_auth)):
+    return {"message": "Datos protegidos", "user_claims": user_claims}
+
+@app.get("/sentry-debug")
+async def trigger_error():
+    """
+    Endpoint para verificar que Sentry está funcionando correctamente.
+    SOLO PARA TESTING - REMOVER EN PRODUCCIÓN
+    """
+    division_by_zero = 1 / 0
+    return {"message": "This should not be reached"}
+
+@app.get("/health")
+def health_check():
+    """Endpoint de health check para monitoreo"""
+    return {
+        "status": "healthy",
+        "service": "Jeturing Core API",
+        "version": "1.0.0-auth0",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+# --- Integración de lacajamanager.txt ---
+
+# Configuración para uploads
+UPLOAD_DIR = 'img'
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Función para obtener conexión a la base de datos
+
+def getConnection():
+    try:
+        conn = mysql.connector.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME
+        )
+        return conn
+    except mysql.connector.Error as err:
+        logger.error(f"Error connecting to database: {err}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error de conexión a la base de datos: {err}"
+        )
+
+# --- Rutas de lacajamanager ---
+
+@app.get('/categories', tags=['categories'])
+def getCategories(token_data: dict = Depends(require_auth)):
+    conn = getConnection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT c.*, CASE WHEN EXISTS(SELECT id FROM lacajita_playlist_categories WHERE id_category=c.id) THEN 1 ELSE 0 END AS hascat FROM lacajita_categories c")
+    categories = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return categories
+
+class Categories(BaseModel):
+    id: int = 0
+    name: str
+
+@app.post('/icategory', tags=['categories'])
+def insertCategory(cat: Categories, token_data: dict = Depends(require_auth)):
+    if cat.name:
+        conn = getConnection()
+        cursor = conn.cursor(dictionary=True)
+        if cat.id == 0:
+            cursor.execute("INSERT INTO lacajita_categories(name) VALUES (%s)", (cat.name,))
+        else:
+            cursor.execute("UPDATE lacajita_categories SET name = %s WHERE id = %s", (cat.name, cat.id))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"msg": "Data has been saved"}
+    else:
+        raise HTTPException(status_code=400, detail="Name is empty")
+
+@app.post('/dcategory', tags=['categories'])
+def deleteCategory(cat: Categories, token_data: dict = Depends(require_auth)):
+    if cat.id > 0:
+        conn = getConnection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("DELETE FROM lacajita_categories WHERE id = %s", (cat.id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"msg": "La categoria ha sido eliminada correctamente"}
+    else:
+        raise HTTPException(status_code=400, detail="Identidad invalida")
+
+# --- Rutas adicionales de lacajamanager ---
+
+@app.get('/segments', tags=['segments'])
+def getSegments(token_data: dict = Depends(require_auth)):
+    conn = getConnection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute('SELECT * FROM lacajita_segments WHERE livetv=0')
+    segments = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return segments
+
+@app.get('/manplaylists', tags=['playlists'])
+def getManPlaylist(token_data: dict = Depends(require_auth)):
+    conn = getConnection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute('SELECT pl.*, se.name AS segment FROM lacajita_playlists pl JOIN lacajita_segments se ON pl.segment_id = se.id')
+    playlists = cursor.fetchall()
+    cursor.execute('SELECT cat.*, pc.id_playlist FROM lacajita_categories cat JOIN lacajita_playlist_categories pc ON pc.id_category = cat.id')
+    categories = cursor.fetchall()
+    cursor.execute('SELECT * FROM lacajita_season')
+    seasons = cursor.fetchall()
+
+    for playlist in playlists:
+        playlist_categories = [cat for cat in categories if cat['id_playlist'] == playlist['id']]
+        playlist_seasons = [season for season in seasons if season['playlist_id'] == playlist['id']]
+        playlist['categories'] = playlist_categories
+        playlist['seasons'] = playlist_seasons
+
+    cursor.close()
+    conn.close()
+    return playlists
+
+@app.get('/seasons', tags=['playlists'])
+def getSeasons(token_data: dict = Depends(require_auth)):
+    conn = getConnection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute('SELECT * FROM lacajita_season')
+    seasons = cursor.fetchall()
+    cursor.execute('SELECT * FROM lacajita_videos')
+    videos = cursor.fetchall()
+
+    for season in seasons:
+        season_videos = [video['video_id'] for video in videos if video['season_id'] == season['id']]
+        season['videos'] = season_videos
+
+    cursor.close()
+    conn.close()
+    return seasons
+
+@app.get('/homecarousel', tags=['carousel'])
+def getHomeCarousel(token_data: dict = Depends(require_auth)):
+    conn = getConnection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute('SELECT * FROM lacajita_home_carousel ORDER BY id')
+    carousel = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return carousel
+
+# ——— Configuración para production/systemd ———————————————————————
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=8080,
+        workers=1,
+        reload=False
+    )

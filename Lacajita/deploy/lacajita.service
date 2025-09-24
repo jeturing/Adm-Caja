@@ -1,0 +1,19 @@
+[Unit]
+Description=La Cajita API (uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/APP/LC
+Environment=PYTHONUNBUFFERED=1
+Environment=VIRTUAL_ENV=/root/APP/LC/venv
+Environment=PATH=/root/APP/LC/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/root/APP/LC/venv/bin/python run_api.py
+Restart=on-failure
+RestartSec=5s
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
