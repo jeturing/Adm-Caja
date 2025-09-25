@@ -1,64 +1,54 @@
 trigger:
   branches:
-    include:
-      - main
+    include: [ main ]
 
 pool:
   name: Default   # self-hosted
 
-variables:
-  pythonVersion: '3.11'
-
 stages:
-  - stage: BuildAndTest
-    displayName: 'Build and Test'
-    jobs:
-      - job: Test
-        displayName: 'Run tests on self-hosted agent'
-        steps:
-          # 1) Instalar Python del sistema y crear venv (Ubuntu 24.04)
-          - script: |
-              set -e
-              sudo apt-get update
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-                python3.11 python3.11-venv python3.11-distutils
-              python3.11 -m venv .venv
-              echo "##vso[task.prependpath]$(System.DefaultWorkingDirectory)/.venv/bin"
-              python --version
-            displayName: 'Setup Python 3.11 (sistema + venv)'
+- stage: BuildAndTest
+  displayName: Build and Test
+  jobs:
+  - job: Test
+    displayName: Run tests on self-hosted agent
+    steps:
+    - script: |
+        set -e
+        VENV=/opt/azagent/venvs/py311
+        if [ ! -x "$VENV/bin/python" ]; then
+          echo "Venv no encontrado en $VENV. Provisiona pyenv/venv en el host."; exit 1
+        fi
+        echo "##vso[task.prependpath]$VENV/bin"
+        python --version
+      displayName: 'Use Python 3.11 (venv persistente)'
 
-          # 2) Dependencias con python -m pip
-          - script: |
-              set -e
-              python -m pip install --upgrade pip wheel setuptools
-              if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
-            displayName: 'Install dependencies'
+    - script: |
+        set -e
+        python -m pip install --upgrade pip wheel setuptools
+        if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+      displayName: 'Install dependencies'
 
-          # 3) Tests (si hay)
-          - script: |
-              set -e
-              if [ -f tests/run_tests.py ]; then python tests/run_tests.py; else echo "No tests/run_tests.py"; fi
-            displayName: 'Run tests (if present)'
+    - script: |
+        set -e
+        if [ -f tests/run_tests.py ]; then python tests/run_tests.py; else echo "No tests/run_tests.py"; fi
+      displayName: 'Run tests (if present)'
 
-  - stage: Deploy
-    displayName: 'Deploy'
-    dependsOn: BuildAndTest
-    condition: succeeded()
-    jobs:
-      - job: DeployToHost
-        displayName: 'Deploy to host'
-        steps:
-          - script: |
-              set -e
-              # Asegurar venv (por si el job corre en limpio)
-              if [ ! -d ".venv" ]; then
-                python3.11 -m venv .venv
-              fi
-              echo "##vso[task.prependpath]$(System.DefaultWorkingDirectory)/.venv/bin"
-              python --version
-            displayName: 'Ensure venv for deploy'
-          - script: |
-              set -e
-              chmod +x deploy/deploy_local.sh || true
-              ./deploy/deploy_local.sh
-            displayName: 'Run local deploy script'
+- stage: Deploy
+  displayName: Deploy
+  dependsOn: BuildAndTest
+  condition: succeeded()
+  jobs:
+  - job: DeployToHost
+    displayName: Deploy to host
+    steps:
+    - script: |
+        set -e
+        VENV=/opt/azagent/venvs/py311
+        echo "##vso[task.prependpath]$VENV/bin"
+        python --version
+      displayName: 'Ensure Python 3.11 venv'
+    - script: |
+        set -e
+        chmod +x deploy/deploy_local.sh || true
+        ./deploy/deploy_local.sh
+      displayName: 'Run local deploy script'
