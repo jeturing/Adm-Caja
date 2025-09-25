@@ -16,36 +16,25 @@ stages:
       - job: Test
         displayName: 'Run tests on self-hosted agent'
         steps:
-          # 1) Instalar Python del sistema y venv (Ubuntu 24.04)
+          # 1) Instalar Python del sistema y crear venv (Ubuntu 24.04)
           - script: |
               set -e
               sudo apt-get update
               sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
                 python3.11 python3.11-venv python3.11-distutils
-              # Crear venv local al repo
               python3.11 -m venv .venv
-              # Activar venv en PATH para pasos siguientes
               echo "##vso[task.prependpath]$(System.DefaultWorkingDirectory)/.venv/bin"
               python --version
             displayName: 'Setup Python 3.11 (sistema + venv)'
 
-          # 2) (Opcional) Cache de pip por requirements.txt
-          - task: Cache@2
-            inputs:
-              key: 'pip | "$(Agent.OS)" | **/requirements.txt'
-              path: $(PIP_CACHE_DIR)
-            env:
-              PIP_CACHE_DIR: $(Pipeline.Workspace)/.pip-cache
-            displayName: 'Cache pip (opcional)'
-
-          # 3) Dependencias
+          # 2) Dependencias con python -m pip
           - script: |
               set -e
               python -m pip install --upgrade pip wheel setuptools
-              if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+              if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
             displayName: 'Install dependencies'
 
-          # 4) Tests (si hay)
+          # 3) Tests (si hay)
           - script: |
               set -e
               if [ -f tests/run_tests.py ]; then python tests/run_tests.py; else echo "No tests/run_tests.py"; fi
@@ -59,16 +48,15 @@ stages:
       - job: DeployToHost
         displayName: 'Deploy to host'
         steps:
-          # Reutiliza el venv si el deploy necesita Python
           - script: |
               set -e
+              # Asegurar venv (por si el job corre en limpio)
               if [ ! -d ".venv" ]; then
                 python3.11 -m venv .venv
               fi
               echo "##vso[task.prependpath]$(System.DefaultWorkingDirectory)/.venv/bin"
               python --version
             displayName: 'Ensure venv for deploy'
-
           - script: |
               set -e
               chmod +x deploy/deploy_local.sh || true
