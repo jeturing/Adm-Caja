@@ -5,6 +5,9 @@ trigger:
 pool:
   name: Default   # self-hosted
 
+variables:
+  pythonVersion: '3.12'
+
 stages:
 - stage: BuildAndTest
   displayName: Build and Test
@@ -14,13 +17,13 @@ stages:
     steps:
     - script: |
         set -e
-        VENV=/opt/azagent/venvs/py311
-        if [ ! -x "$VENV/bin/python" ]; then
-          echo "Venv no encontrado en $VENV. Provisiona pyenv/venv en el host."; exit 1
+        if ! command -v python3.12 >/dev/null 2>&1; then
+          echo "Python 3.12 no está instalado en el host"; exit 1
         fi
-        echo "##vso[task.prependpath]$VENV/bin"
+        python3.12 -m venv .venv
+        echo "##vso[task.prependpath]$(System.DefaultWorkingDirectory)/.venv/bin"
         python --version
-      displayName: 'Use Python 3.11 (venv persistente)'
+      displayName: 'Setup Python 3.12 (venv)'
 
     - script: |
         set -e
@@ -43,10 +46,10 @@ stages:
     steps:
     - script: |
         set -e
-        VENV=/opt/azagent/venvs/py311
-        echo "##vso[task.prependpath]$VENV/bin"
+        if [ ! -d ".venv" ]; then python3.12 -m venv .venv; fi
+        echo "##vso[task.prependpath]$(System.DefaultWorkingDirectory)/.venv/bin"
         python --version
-      displayName: 'Ensure Python 3.11 venv'
+      displayName: 'Ensure Python 3.12 venv'
     - script: |
         set -e
         chmod +x deploy/deploy_local.sh || true
